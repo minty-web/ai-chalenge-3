@@ -28,5 +28,10 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
+    // The on-device recogniser is a dynamic import, so @huggingface/transformers
+    // and its onnxruntime wasm land in their own chunks that are only fetched when
+    // someone switches to local mode. They are legitimately large, hence the raised
+    // limit — the app's own entry chunk stays around 370 kB.
+    chunkSizeWarningLimit: 800,
   },
 });

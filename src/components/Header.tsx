@@ -1,188 +1,100 @@
-import { useEffect, useRef, useState } from 'react';
-import {
-  Check,
-  Cloud,
-  CloudOff,
-  Loader2,
-  Menu,
-  Monitor,
-  Moon,
-  Pencil,
-  Settings as SettingsIcon,
-  Sun,
-} from 'lucide-react';
+import { Loader2, Settings, Sun, Moon, Monitor, Library, Menu } from 'lucide-react';
 import type { AppStore } from '../hooks/useAppStore';
-import type { ThemeMode } from '../types';
-import { Logo } from './Logo';
+import { Wordmark } from './Logo';
+import { themeNext } from '../lib/util';
 
-const THEME_ORDER: ThemeMode[] = ['light', 'dark', 'system'];
-const THEME_ICON = { light: Sun, dark: Moon, system: Monitor } as const;
-const THEME_LABEL = { light: 'Light', dark: 'Dark', system: 'System' } as const;
-
-interface Props {
+/**
+ * Top bar: brand, tagline, and (on wide screens) the live controls.
+ *
+ * The record button and direction pill live here on desktop because they are the
+ * two things a user touches constantly; on smaller screens they move into the flow
+ * of the page, which is what the reference layouts do.
+ */
+export function Header({
+  store,
+  onOpenSettings,
+  onOpenSessions,
+  onToggleRail,
+}: {
   store: AppStore;
-  onToggleSidebar: () => void;
   onOpenSettings: () => void;
-  sidebarOpen: boolean;
-}
-
-export function Header({ store, onToggleSidebar, onOpenSettings, sidebarOpen }: Props) {
-  const { session, settings, updateSettings, renameSession, saving, savedAt, online } = store;
+  onOpenSessions: () => void;
+  onToggleRail?: () => void;
+}) {
+  const { settings } = store;
+  const ThemeIcon = settings.theme === 'dark' ? Moon : settings.theme === 'light' ? Sun : Monitor;
 
   return (
-    <header className="sticky top-0 z-30 border-b border-line bg-bg/85 backdrop-blur-md">
-      <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-2 px-3 sm:gap-3 sm:px-4">
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          className="ln-btn ln-btn-ghost ln-btn-icon lg:hidden"
-          aria-label={sidebarOpen ? 'Close session list' : 'Open session list'}
-          aria-expanded={sidebarOpen}
-        >
-          <Menu size={16} />
-        </button>
+    <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line px-4 py-3.5 md:px-7 lg:px-12 lg:py-4">
+      <div className="flex items-center gap-3.5">
+        {onToggleRail ? (
+          <button
+            type="button"
+            onClick={onToggleRail}
+            className="ln-btn ln-btn-icon ln-btn-ghost lg:hidden"
+            aria-label="Sessions"
+          >
+            <Menu size={16} />
+          </button>
+        ) : null}
+        <Wordmark height={32} />
+        <span className="hidden border-l border-line pl-3.5 text-[0.8125rem] text-dim sm:inline">
+          live FI ↔ EN notebook
+        </span>
+      </div>
 
-        <div className="flex select-none items-center gap-2">
-          <Logo size={28} className="shrink-0 rounded-lg" />
-          <span className="text-[0.9375rem] font-semibold tracking-tight text-ink">
-            Chatter<span style={{ color: 'var(--ln-brand-2)' }}>Snap</span>
-          </span>
-          <span className="hidden text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted sm:inline">
-            FI ↔ EN
-          </span>
-        </div>
-
-        <div className="mx-1 hidden h-5 w-px bg-line sm:block" aria-hidden />
-
-        <div className="min-w-0 flex-1">
-          <SessionTitle
-            title={session?.title ?? 'No session'}
-            onRename={(next) => void renameSession(next)}
-          />
-        </div>
-
-        <div
-          className="hidden items-center gap-1.5 rounded-full border border-line px-2.5 py-1 md:flex"
-          title={savedAt ? `Last saved ${new Date(savedAt).toLocaleTimeString()}` : 'Nothing saved yet'}
-          aria-live="polite"
-        >
-          {saving ? (
-            <Loader2 size={11} className="animate-spin text-muted" aria-hidden />
-          ) : (
-            <Check size={11} style={{ color: 'var(--ln-ok)' }} aria-hidden />
-          )}
-          <span className="text-[0.6875rem] font-medium text-muted">
-            {saving ? 'Saving…' : savedAt ? 'Saved locally' : 'Not saved yet'}
-          </span>
-        </div>
-
+      <div className="flex items-center gap-2">
+        <span className="ln-chip hidden md:inline-flex" title="Entries in this session">
+          {store.stats.total} {store.stats.total === 1 ? 'line' : 'lines'}
+        </span>
         <span
-          className="hidden items-center gap-1.5 rounded-full border border-line px-2.5 py-1 sm:flex"
-          title={
-            online
-              ? 'Internet reachable — online translation available'
-              : 'Offline — entries still save on this device'
-          }
+          className="ln-chip hidden md:inline-flex"
+          title={store.saving ? 'Writing to this browser' : 'Stored in this browser only'}
         >
-          {online ? (
-            <Cloud size={11} style={{ color: 'var(--ln-ok)' }} aria-hidden />
+          {store.saving ? (
+            <Loader2 size={11} className="animate-spin" aria-hidden />
           ) : (
-            <CloudOff size={11} style={{ color: 'var(--ln-warn)' }} aria-hidden />
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 999,
+                background: store.storageFault ? 'var(--ln-danger)' : 'var(--ln-ok)',
+              }}
+            />
           )}
-          <span className="text-[0.6875rem] font-medium text-muted">{online ? 'Online' : 'Offline'}</span>
+          {store.storageFault ? 'Not saving' : store.savedAt ? 'Saved' : 'Ready'}
         </span>
 
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => {
-              const next = THEME_ORDER[(THEME_ORDER.indexOf(settings.theme) + 1) % THEME_ORDER.length];
-              updateSettings({ theme: next });
-            }}
-            className="ln-btn ln-btn-ghost ln-btn-icon"
-            title={`Theme: ${THEME_LABEL[settings.theme]} — click to change`}
-            aria-label={`Theme: ${THEME_LABEL[settings.theme]}. Change theme`}
-          >
-            {(() => {
-              const Icon = THEME_ICON[settings.theme];
-              return <Icon size={15} />;
-            })()}
-          </button>
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="ln-btn ln-btn-ghost ln-btn-icon"
-            title="Settings"
-            aria-label="Open settings"
-          >
-            <SettingsIcon size={15} />
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onOpenSessions}
+          className="ln-btn ln-btn-ghost ln-btn-icon"
+          aria-label="Sessions and saved notebooks"
+          title="Sessions"
+        >
+          <Library size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => store.updateSettings({ theme: themeNext(settings.theme) })}
+          className="ln-btn ln-btn-ghost ln-btn-icon"
+          aria-label={`Theme: ${settings.theme}. Switch to ${themeNext(settings.theme)}.`}
+          title={`Theme: ${settings.theme}`}
+        >
+          <ThemeIcon size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="ln-btn ln-btn-ghost ln-btn-icon"
+          aria-label="Settings"
+          title="Settings"
+        >
+          <Settings size={16} />
+        </button>
       </div>
     </header>
-  );
-}
-
-function SessionTitle({ title, onRename }: { title: string; onRename: (next: string) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(title);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!editing) setDraft(title);
-  }, [title, editing]);
-
-  useEffect(() => {
-    if (editing) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [editing]);
-
-  const commit = () => {
-    setEditing(false);
-    const next = draft.trim();
-    if (next && next !== title) onRename(next);
-    else setDraft(title);
-  };
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            commit();
-          }
-          if (e.key === 'Escape') {
-            setDraft(title);
-            setEditing(false);
-          }
-        }}
-        maxLength={80}
-        className="ln-input h-8 max-w-xs py-1 text-[0.8125rem] font-medium"
-        aria-label="Session name"
-      />
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => setEditing(true)}
-      className="group flex min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-panel-2"
-      title="Rename this session"
-    >
-      <span className="truncate text-[0.8125rem] font-medium text-ink">{title}</span>
-      <Pencil
-        size={11}
-        className="shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100"
-        aria-hidden
-      />
-    </button>
   );
 }

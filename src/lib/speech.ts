@@ -18,6 +18,7 @@ const PROTECTED_ABBREVIATIONS = [
   'klo',
   'nro',
   'ym',
+  'yms',
   'vrt',
   'ts',
   'no',

@@ -1,256 +1,384 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Mic, WifiOff, X } from 'lucide-react';
+import { CloudOff, Loader2, Mic, TriangleAlert, X } from 'lucide-react';
 import { useAppStore } from './hooks/useAppStore';
 import { useSpeech } from './hooks/useSpeech';
 import { Header } from './components/Header';
-import { DirectionSwitch } from './components/DirectionSwitch';
-import { RecorderBar } from './components/RecorderBar';
+import { DirectionPill } from './components/DirectionPill';
+import { RecordButton, RecordStatus, RecordingTimer } from './components/Controls';
 import { Notebook } from './components/Notebook';
+import { SideRail } from './components/SideRail';
 import { ManualInput } from './components/ManualInput';
-import { SessionDrawer } from './components/SessionDrawer';
+import { SessionsPanel } from './components/SessionsPanel';
 import { SettingsDialog } from './components/SettingsDialog';
-import { ExportMenu } from './components/ExportMenu';
-import { Toasts } from './components/Toasts';
 import { ConfirmDialog } from './components/ConfirmDialog';
-import { langsOf } from './types';
-import { resolveLocale } from './lib/speech';
-import { resetSettings } from './lib/settings';
+import { MicTestDialog } from './components/MicTestDialog';
+import { Toasts } from './components/Toasts';
+import { downloadFile } from './lib/export';
+import { formatClockSeconds } from './lib/util';
+import { LANG_CODE, otherLang } from './types';
 
 export default function App() {
   const store = useAppStore();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
-  const [adding, setAdding] = useState(false);
-
-  const { source, target } = langsOf(store.direction);
+  const [dismissed, setDismissed] = useState<string[]>([]);
+  const [micTestOpen, setMicTestOpen] = useState(false);
 
   const speech = useSpeech({
-    lang: source,
-    override: store.settings.recognitionLang,
-    onSentence: (sentence) => {
-      void store.addEntry(sentence, 'speech');
+    startLang: store.liveLang,
+    direction: store.direction,
+    localePref: store.settings.recognitionLang,
+    engine: store.settings.asrEngine,
+    model: store.settings.asrModel,
+    onSentence: (text, lang, detected) => {
+      void store.addEntry(text, 'speech', lang, detected);
     },
-    onInterim: (text) => store.setInterim(text),
-    onNotice: (title, detail, tone) => store.pushToast({ tone, title, detail }),
+    onInterim: (text, lang) => store.setInterim(text.trim() ? { text, lang } : null),
+    onLanguageChange: store.setLiveLang,
+    onNotice: (title, detail, tone) =>
+      store.pushToast({ title, detail, tone: tone === 'error' ? 'error' : tone }),
     setRecorder: store.setRecorder,
     setMic: store.setMic,
     setStartedAt: store.setRecordingStartedAt,
   });
 
-  // Keep the recogniser locale in sync with the direction / settings.
-  useEffect(() => {
-    speech.setLocale(source, store.settings.recognitionLang);
-  }, [source, store.settings.recognitionLang, speech]);
+  const listening = store.recorder === 'listening' || store.recorder === 'starting';
 
-  const handleStart = useCallback(async () => {
-    if (!store.session) {
-      store.pushToast({
-        tone: 'error',
-        title: 'No open session',
-        detail: 'Create a session before recording.',
-      });
-      return;
-    }
-    await speech.start();
-  }, [speech, store]);
+  const toggleRecording = useCallback(() => {
+    if (listening) void speech.stop();
+    else void speech.start();
+  }, [listening, speech]);
 
-  const handleStop = useCallback(async () => {
-    await speech.stop();
-  }, [speech]);
+  const anyDialogOpen = settingsOpen || sessionsOpen || confirmClear || confirmReset || micTestOpen;
 
-  // Space bar toggles recording, Escape stops it.
+  // Space starts and stops; Esc stops. Both stay out of the way while typing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement | null;
+      const target = e.target as HTMLElement | null;
       const typing =
-        el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
-      if (typing || settingsOpen || confirmClear || confirmReset) return;
-      if (e.code === 'Space' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (typing || anyDialogOpen) return;
+      if (e.key === ' ' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
-        if (store.recorder === 'listening' || store.recorder === 'starting') void handleStop();
-        else void handleStart();
-      }
-      if (e.key === 'Escape' && (store.recorder === 'listening' || store.recorder === 'starting')) {
+        toggleRecording();
+      } else if (e.key === 'Escape' && listening) {
         e.preventDefault();
-        void handleStop();
+        void speech.stop();
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [handleStart, handleStop, settingsOpen, confirmClear, confirmReset, store.recorder]);
+  }, [toggleRecording, listening, speech, anyDialogOpen]);
 
-  // Stop recognition when the tab is hidden for a long time (browsers kill it anyway).
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden' && speech.support.supported) {
-        // Recognisers stop themselves; nothing to do but let onend fire.
+  const doExport = useCallback(
+    (format: 'md' | 'txt') => {
+      if (!store.session) return;
+      if (store.entries.length === 0) {
+        store.pushToast({
+          tone: 'info',
+          title: 'Nothing to export yet',
+          detail: 'Add a line first — the file would be empty.',
+        });
+        return;
       }
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [speech.support.supported]);
-
-  const submitManual = useCallback(
-    async (text: string) => {
-      setAdding(true);
-      try {
-        await store.addEntry(text, 'manual');
-      } finally {
-        setAdding(false);
-      }
+      const built = store.buildCurrentExport(format);
+      downloadFile(built.content, built.filename, built.mime);
+      store.pushToast({ tone: 'success', title: `Exported ${format.toUpperCase()}`, detail: built.filename });
     },
     [store],
   );
 
-  const copyToClipboard = useCallback(
-    (text: string) => {
-      navigator.clipboard
-        ?.writeText(text)
-        .then(() => store.pushToast({ tone: 'success', title: 'Copied to clipboard' }))
-        .catch(() =>
-          store.pushToast({
-            tone: 'warning',
-            title: 'Copy blocked',
-            detail: 'Your browser did not allow clipboard access.',
-          }),
-        );
-    },
-    [store],
+  /**
+   * Auto mode has nothing to invert — the app already translates both ways — so
+   * the swap button moves the starting language of the recogniser instead.
+   */
+  const swapDirection = useCallback(() => {
+    if (store.direction === 'auto') store.setLiveLang(otherLang(store.liveLang));
+    else void store.setDirection(store.direction === 'fi-en' ? 'en-fi' : 'fi-en');
+  }, [store]);
+
+  const dismiss = (id: string) => setDismissed((prev) => [...prev, id]);
+  const showBanner = (id: string) => !dismissed.includes(id);
+
+  const pill = (stretch: boolean) => (
+    <DirectionPill
+      direction={store.direction}
+      liveLang={store.liveLang}
+      onSwap={swapDirection}
+      onPin={(lang) => void store.setDirection(lang === 'fi' ? 'fi-en' : 'en-fi')}
+      onAuto={() => void store.setDirection('auto')}
+      disabled={listening}
+      stretch={stretch}
+    />
   );
 
-  const directionLocked = store.recorder === 'listening' || store.recorder === 'starting';
+  const micTestButton = (withLabel: boolean) => (
+    <button
+      type="button"
+      onClick={() => setMicTestOpen(true)}
+      className={
+        withLabel
+          ? 'ln-btn ln-btn-ghost h-8 gap-1.5 px-2.5 text-[0.75rem]'
+          : 'ln-btn ln-btn-ghost ln-btn-icon'
+      }
+      aria-label="Test the microphone"
+      title="Test the microphone"
+    >
+      <Mic size={withLabel ? 13 : 15} />
+      {withLabel ? 'Test mic' : null}
+    </button>
+  );
 
   return (
-    <div className="flex h-full flex-col bg-bg">
+    <div className="flex h-full flex-col bg-bg text-ink">
       <Header
         store={store}
-        onToggleSidebar={() => setSidebarOpen((v) => !v)}
         onOpenSettings={() => setSettingsOpen(true)}
-        sidebarOpen={sidebarOpen}
+        onOpenSessions={() => setSessionsOpen(true)}
       />
 
-      <div className="mx-auto flex w-full max-w-[1400px] flex-1 overflow-hidden">
-        {/* Sidebar is fixed on small screens; the layout spacer shows on lg. */}
-        <div className="hidden w-[19rem] shrink-0 lg:block">
-          <SessionDrawer store={store} open onClose={() => undefined} />
+      {/* Desktop: everything sits on one control line under the header. */}
+      <div className="hidden border-b border-line px-12 py-3 lg:block">
+        <div className="mx-auto flex max-w-[1180px] items-center gap-4">
+          {pill(false)}
+          <RecordStatus state={store.recorder} liveLang={store.liveLang} engine={store.settings.asrEngine} />
+          <RecordButton state={store.recorder} onToggle={toggleRecording} />
+          {micTestButton(false)}
         </div>
-        <div className="lg:hidden">
-          <SessionDrawer store={store} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-        </div>
+      </div>
 
-        <main className="flex min-w-0 flex-1 flex-col border-l-0 border-line lg:border-l">
-          {/* Toolbar */}
-          <div className="shrink-0 border-b border-line bg-bg px-3 py-2.5 sm:px-4">
-            <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
-              <DirectionSwitch
-                value={store.direction}
-                onChange={(d) => void store.setDirection(d)}
-                disabled={directionLocked}
-              />
-              {directionLocked ? (
-                <span className="text-[0.6875rem] text-muted">Stop recording to switch direction</span>
-              ) : null}
-              <div className="ml-auto flex items-center gap-1.5">
-                <span className="ln-chip hidden sm:inline-flex" title="Entries in this session">
-                  {store.stats.total} {store.stats.total === 1 ? 'entry' : 'entries'}
-                  {store.stats.failed > 0 ? (
-                    <span style={{ color: 'var(--ln-danger)' }}>· {store.stats.failed} failed</span>
-                  ) : null}
-                </span>
-                <ExportMenu store={store} />
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[1180px] px-4 pb-2 pt-3 md:px-7 md:pt-5 lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start lg:gap-8 lg:px-12 lg:pb-8 lg:pt-8">
+          <div className="hidden lg:block">
+            <SideRail store={store} onExport={doExport} onOpenSessions={() => setSessionsOpen(true)} />
+          </div>
+
+          <div className="min-w-0">
+            {/* Phone: a full-width pair with the status underneath. */}
+            <div className="mb-3 md:hidden">
+              {pill(true)}
+              <div className="mt-2.5 flex items-center justify-between gap-2">
+                <RecordStatus state={store.recorder} liveLang={store.liveLang} engine={store.settings.asrEngine} />
+                {micTestButton(true)}
               </div>
             </div>
-          </div>
 
-          {/* Recorder */}
-          <div className="shrink-0 px-3 pt-3 sm:px-4">
-            <div className="mx-auto max-w-3xl space-y-2">
-              <RecorderBar
-                state={store.recorder}
-                mic={store.mic}
-                startedAt={store.recordingStartedAt}
-                interim={store.interim}
-                supported={speech.support.supported}
-                supportReason={speech.support.reason}
-                localeLabel={resolveLocale(source, store.settings.recognitionLang)}
-                onStart={() => void handleStart()}
-                onStop={() => void handleStop()}
-              />
-              {store.storageFault ? (
-                <Banner
-                  tone="error"
-                  icon={<AlertTriangle size={13} aria-hidden />}
-                  title="Local storage problem"
-                  body={`${store.storageFault} Export your notebook before closing this tab.`}
-                />
-              ) : null}
-              {!store.online ? (
-                <Banner
-                  tone="warning"
-                  icon={<WifiOff size={13} aria-hidden />}
-                  title="You are offline"
-                  body="Sentences are still transcribed and saved. Translations will retry when the connection returns — or use the Retry button on a failed entry."
-                />
-              ) : null}
-              {!store.settings.autoTranslate ? (
-                <Banner
-                  tone="info"
-                  icon={<Mic size={13} aria-hidden />}
-                  title="Automatic translation is off"
-                  body="New sentences are saved as originals. Use Re-translate on any entry, or turn automatic translation back on in Settings."
-                />
-              ) : null}
+            {/* Tablet: the same controls, centred, as a bar above the feed. */}
+            <div className="mb-4 hidden flex-wrap items-center justify-center gap-x-4 gap-y-2 border-b border-line pb-4 md:flex lg:hidden">
+              {pill(false)}
+              <RecordStatus state={store.recorder} liveLang={store.liveLang} engine={store.settings.asrEngine} />
+              <RecordButton state={store.recorder} onToggle={toggleRecording} />
+              {micTestButton(false)}
             </div>
-          </div>
 
-          {/* Notebook */}
-          <div className="flex min-h-0 flex-1 flex-col pt-2">
+            {showBanner('model') &&
+            speech.modelProgress &&
+            speech.modelProgress.status !== 'ready' &&
+            store.settings.asrEngine === 'local' ? (
+              <Banner
+                tone={speech.modelProgress.status === 'error' ? 'danger' : 'info'}
+                icon={
+                  speech.modelProgress.status === 'error' ? (
+                    <TriangleAlert size={13} aria-hidden />
+                  ) : (
+                    <Loader2 size={13} className="animate-spin" aria-hidden />
+                  )
+                }
+                title={
+                  speech.modelProgress.status === 'error'
+                    ? 'The on-device model did not load'
+                    : 'Downloading the on-device model'
+                }
+                body={
+                  speech.modelProgress.status === 'error'
+                    ? `${speech.modelProgress.detail} You can switch back to the browser engine in settings, or keep typing — nothing is lost.`
+                    : `${speech.modelProgress.detail} This happens once; afterwards it runs offline and no audio leaves this device.`
+                }
+                onDismiss={() => dismiss('model')}
+              />
+            ) : null}
+
+            {showBanner('storage') && store.storageFault ? (
+              <Banner
+                tone="danger"
+                icon={<TriangleAlert size={13} aria-hidden />}
+                title="This browser is not saving"
+                body={store.storageFault}
+                onDismiss={() => dismiss('storage')}
+              />
+            ) : null}
+            {showBanner('offline') && !store.online ? (
+              <Banner
+                tone="warning"
+                icon={<CloudOff size={13} aria-hidden />}
+                title="You are offline"
+                body="Speech and translation need a connection. Typed lines are still saved on this device."
+                onDismiss={() => dismiss('offline')}
+              />
+            ) : null}
+            {showBanner('autotranslate') && !store.settings.autoTranslate ? (
+              <Banner
+                tone="info"
+                icon={<Loader2 size={13} aria-hidden />}
+                title="Auto-translate is off"
+                body="New lines are saved untranslated. Use Re-translate on any line when you want it."
+                onDismiss={() => dismiss('autotranslate')}
+              />
+            ) : null}
+            {showBanner('unsupported') &&
+            store.settings.asrEngine === 'browser' &&
+            !speech.support.supported ? (
+              <Banner
+                tone="warning"
+                icon={<TriangleAlert size={13} aria-hidden />}
+                title="No speech recognition in this browser"
+                body={`${speech.support.reason ?? 'The Web Speech API is unavailable here.'} Typing works exactly the same — every line is still translated and saved.`}
+                onDismiss={() => dismiss('unsupported')}
+              />
+            ) : null}
+
             <Notebook
               entries={store.entries}
               interim={store.interim}
               showInterim={store.settings.showInterim}
               autoScroll={store.settings.autoScroll}
-              sourceLang={source}
-              targetLang={target}
               listening={store.recorder === 'listening'}
               booting={store.booting}
               onRetry={store.retryTranslation}
               onEdit={store.editEntry}
               onDelete={store.removeEntry}
-              onCopy={copyToClipboard}
+              onSwapLanguage={store.swapEntryLanguage}
+              onCopy={(text) => {
+                void navigator.clipboard
+                  ?.writeText(text)
+                  .then(() =>
+                    store.pushToast({ tone: 'success', title: 'Copied', detail: 'Original and translation.' }),
+                  )
+                  .catch(() =>
+                    store.pushToast({ tone: 'error', title: 'Could not copy', detail: 'Clipboard blocked.' }),
+                  );
+              }}
             />
-          </div>
 
-          <ManualInput
-            sourceLang={source}
-            targetLang={target}
-            onSubmit={submitManual}
-            busy={adding}
-            disabled={!store.session}
+            <ManualInput
+              onSubmit={async (text) => {
+                await store.addEntry(text, 'manual');
+              }}
+              busy={store.saving}
+              disabled={store.booting}
+            />
+            <div className="mt-4 hidden flex-wrap items-center justify-center gap-2 md:flex lg:hidden">
+              <span className="ln-stat" style={{ color: 'var(--ln-muted)' }}>
+                <RecordingTimer
+                  startedAt={store.recordingStartedAt}
+                  recording={listening}
+                  fallbackMs={
+                    store.session ? Math.max(0, store.session.updatedAt - store.session.createdAt) : 0
+                  }
+                />
+                <span aria-hidden>·</span>
+                {store.entries.length} {store.entries.length === 1 ? 'line' : 'lines'}
+              </span>
+              <span className="ln-stat" style={{ color: 'var(--ln-muted)' }}>
+                {store.storageFault ? 'Not saving' : store.savedAt ? `Saved ${formatClockSeconds(store.savedAt)}` : 'Ready'}
+              </span>
+              <button type="button" className="ln-stat" onClick={() => doExport('txt')}>
+                Export .txt
+              </button>
+              <button type="button" className="ln-stat" onClick={() => doExport('md')}>
+                Export .md
+              </button>
+              <button
+                type="button"
+                className="w-full py-1 text-center text-[0.8125rem]"
+                style={{ color: 'var(--ln-brand-2)' }}
+                onClick={() => setSessionsOpen(true)}
+              >
+                View saved notebooks →
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/*
+        Phone: the record button lives in a fixed bar at the bottom of the viewport.
+        On a long conversation the feed scrolls, and a Start button that has scrolled
+        out of reach is useless — this keeps it under the thumb at all times.
+      */}
+      <div
+        className="shrink-0 border-t border-line px-4 pb-3 pt-3 md:hidden"
+        style={{ backgroundColor: 'var(--ln-bg)' }}
+      >
+        <p className="mb-2 text-center text-[0.6875rem]" style={{ color: 'var(--ln-faint)' }}>
+          <RecordingTimer
+            startedAt={store.recordingStartedAt}
+            recording={listening}
+            fallbackMs={
+              store.session ? Math.max(0, store.session.updatedAt - store.session.createdAt) : 0
+            }
+            className="tabular-nums"
           />
-        </main>
+          {' · '}
+          {store.entries.length} {store.entries.length === 1 ? 'line' : 'lines'}
+          {' · '}
+          {store.storageFault ? 'not saving' : store.savedAt ? `saved ${formatClockSeconds(store.savedAt)}` : 'ready'}
+          {' · '}
+          {LANG_CODE[store.liveLang]} in
+          {' · '}
+          <button
+            type="button"
+            onClick={() => setSessionsOpen(true)}
+            style={{ color: 'var(--ln-brand-2)' }}
+            className="underline-offset-2 hover:underline"
+          >
+            notebooks
+          </button>
+        </p>
+        <RecordButton state={store.recorder} onToggle={toggleRecording} full />
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => doExport('txt')}
+            className="rounded-lg border border-line px-3 py-2 text-[0.75rem] font-medium"
+            style={{ backgroundColor: 'var(--ln-panel)' }}
+          >
+            Export .txt
+          </button>
+          <button
+            type="button"
+            onClick={() => doExport('md')}
+            className="rounded-lg border border-line px-3 py-2 text-[0.75rem] font-medium"
+            style={{ backgroundColor: 'var(--ln-panel)' }}
+          >
+            Export .md
+          </button>
+        </div>
       </div>
 
+      <SessionsPanel store={store} open={sessionsOpen} onClose={() => setSessionsOpen(false)} />
       <SettingsDialog
         store={store}
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        onRequestClearSession={() => {
-          setSettingsOpen(false);
-          setConfirmClear(true);
-        }}
-        onRequestResetSettings={() => {
-          setSettingsOpen(false);
-          setConfirmReset(true);
-        }}
+        onRequestClearSession={() => setConfirmClear(true)}
+        onRequestResetSettings={() => setConfirmReset(true)}
+      />
+
+      <MicTestDialog
+        open={micTestOpen}
+        onClose={() => setMicTestOpen(false)}
+        lang={store.liveLang}
+        localePref={store.settings.recognitionLang}
       />
 
       <ConfirmDialog
         open={confirmClear}
-        title="Clear this session?"
-        body={`All ${store.stats.total} ${store.stats.total === 1 ? 'entry' : 'entries'} in “${store.session?.title ?? 'this session'}” will be deleted from this browser. The session itself stays. Export first if you want to keep a copy.`}
+        title="Clear this notebook?"
+        body={`All ${store.entries.length} lines are deleted from this browser. The session itself stays. Export first if you want a copy — this cannot be undone.`}
         confirmLabel="Clear notebook"
         destructive
         onCancel={() => setConfirmClear(false)}
@@ -259,16 +387,27 @@ export default function App() {
           void store.clearCurrentSession();
         }}
       />
-
       <ConfirmDialog
         open={confirmReset}
-        title="Reset all settings?"
-        body="Theme, engine, direction and export preferences return to their defaults. Your conversations are not touched."
+        title="Reset settings?"
+        body="Theme, listening mode, engine and export options go back to their defaults. Your notebooks and saved lines are untouched."
         confirmLabel="Reset settings"
         onCancel={() => setConfirmReset(false)}
         onConfirm={() => {
           setConfirmReset(false);
-          resetSettings();
+          store.updateSettings({
+            theme: 'system',
+            defaultDirection: 'auto',
+            recognitionLang: 'auto',
+            autoTranslate: true,
+            autoScroll: true,
+            provider: 'auto',
+            useProxyCredentials: false,
+            exportFormat: 'md',
+            exportIncludeTranslation: true,
+            exportIncludeTimestamps: true,
+            showInterim: true,
+          });
           store.pushToast({ tone: 'success', title: 'Settings reset' });
         }}
       />
@@ -283,44 +422,42 @@ function Banner({
   icon,
   title,
   body,
+  onDismiss,
 }: {
-  tone: 'error' | 'warning' | 'info';
+  tone: 'info' | 'warning' | 'danger';
   icon: React.ReactNode;
   title: string;
   body: string;
+  onDismiss: () => void;
 }) {
   const color =
-    tone === 'error' ? 'var(--ln-danger)' : tone === 'warning' ? 'var(--ln-warn)' : 'var(--ln-accent)';
-  const [dismissed, setDismissed] = useState(false);
-  if (dismissed) return null;
+    tone === 'danger' ? 'var(--ln-danger)' : tone === 'warning' ? 'var(--ln-warn)' : 'var(--ln-accent)';
   return (
     <div
-      className="flex items-start gap-2 rounded-lg border px-2.5 py-2 text-[0.75rem] leading-relaxed"
+      className="mb-3 flex items-start gap-2.5 rounded-lg px-3 py-2.5"
       style={{
-        borderColor: `color-mix(in srgb, ${color} 35%, transparent)`,
-        backgroundColor: `color-mix(in srgb, ${color} 9%, transparent)`,
+        backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
       }}
-      role={tone === 'error' ? 'alert' : 'status'}
+      role="status"
     >
-      <span className="mt-0.5 shrink-0" style={{ color }}>
+      <span className="mt-0.5 shrink-0" style={{ color }} aria-hidden>
         {icon}
       </span>
       <div className="min-w-0 flex-1">
-        <p className="font-semibold" style={{ color }}>
+        <p className="text-[0.8125rem] font-semibold" style={{ color }}>
           {title}
         </p>
-        <p className="mt-0.5 text-muted">{body}</p>
+        <p className="mt-0.5 text-[0.75rem] leading-relaxed text-muted">{body}</p>
       </div>
-      {tone !== 'error' ? (
-        <button
-          type="button"
-          onClick={() => setDismissed(true)}
-          className="shrink-0 rounded p-0.5 text-muted hover:text-ink"
-          aria-label="Dismiss"
-        >
-          <X size={11} />
-        </button>
-      ) : null}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="-m-1 shrink-0 rounded p-1 text-muted"
+        aria-label="Dismiss"
+      >
+        <X size={13} />
+      </button>
     </div>
   );
 }

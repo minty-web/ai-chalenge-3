@@ -35,7 +35,6 @@ export class SpeechEngine {
   private rec: SpeechRecognitionLike | null = null;
   private want = false;
   private listening = false;
-  private buffer = '';
   private timer: number | null = null;
   private restartTimer: number | null = null;
   private restarts = 0;
@@ -45,6 +44,25 @@ export class SpeechEngine {
   private lastEmitKey = '';
   private lastEmitAt = 0;
   private splitter = new SentenceSplitter();
+  /**
+   * Finalised text per result index, plus the last index already written out.
+   *
+   * Chrome re-fires a result it has already finalised with revised text: say
+   * "Moi miten menee" and it can hand back "Moi", then "Moi miten", then the full
+   * line, each of them *final*. Appending those deltas is what turns one sentence
+   * into "Moi Moi Moi miten Moi miten menee". The result index does not move when
+   * the text is revised, so the index is the unit: a revision overwrites its own
+   * slot, and each slot is written to the notebook once, in order.
+   */
+  private finals = new Map<number, string>();
+  /**
+   * What has already been written for each index.
+   *
+   * Kept as text rather than a length so a revision can be checked with
+   * `startsWith`: if the browser replaces the words instead of extending them,
+   * nothing is emitted for that index — it has already been said.
+   */
+  private written = new Map<number, string>();
 
   constructor(
     private locale: string,
@@ -53,6 +71,10 @@ export class SpeechEngine {
 
   get isListening(): boolean {
     return this.listening;
+  }
+
+  get currentLocale(): string {
+    return this.locale;
   }
 
   get durationMs(): number {
@@ -68,6 +90,49 @@ export class SpeechEngine {
         // Applied on the next start instead.
       }
     }
+  }
+
+  /**
+   * Retune a recogniser that is already running.
+   *
+   * `setLocale` only changes the value the *next* instance will use, which is
+   * useless mid-conversation: Chrome will not re-interpret audio for a new
+   * locale. The only way to actually hear the other language is to build a fresh
+   * recogniser, so pending text is flushed (attributed to the language it was
+   * heard in) and the instance is replaced without breaking the recording
+   * session.
+   */
+  switchLocale(locale: string): void {
+    if (locale === this.locale) return;
+    this.locale = locale;
+    if (!this.want || !this.rec) return;
+
+    this.flush('stop');
+    this.handlers.onInterim('');
+
+    const previous = this.rec;
+    this.rec = null;
+    this.detach(previous);
+    try {
+      previous.abort();
+    } catch {
+      // Nothing left to abort.
+    }
+
+    // Give the aborted instance a moment to release the microphone before the
+    // replacement claims it; starting too early throws InvalidStateError.
+    window.setTimeout(() => {
+      if (!this.want || this.disposed || this.rec) return;
+      this.spawn();
+    }, 120);
+  }
+
+  private detach(rec: SpeechRecognitionLike | null): void {
+    if (!rec) return;
+    rec.onresult = null;
+    rec.onerror = null;
+    rec.onend = null;
+    rec.onstart = null;
   }
 
   primeKnown(sentences: string[]): void {
@@ -100,6 +165,10 @@ export class SpeechEngine {
     rec.continuous = true;
     rec.interimResults = true;
     rec.maxAlternatives = 1;
+
+    // A fresh instance reports its results from index 0 again.
+    this.finals.clear();
+    this.written.clear();
 
     rec.onstart = () => {
       this.listening = true;
@@ -160,32 +229,35 @@ export class SpeechEngine {
   }
 
   private handleResult(event: SpeechRecognitionEventLike): void {
+    // Reassemble the transcript from the results list instead of appending what is
+    // new. Chrome repeats finalised results with revised text — say "Moi miten
+    // menee" and it can hand back "Moi", then "Moi miten", then the full line,
+    // each marked final. Appending those deltas is exactly what produces "Moi Moi
+    // Moi miten Moi miten menee". A revision does not change its index, so each
+    // index keeps one slot and the transcript is rebuilt from the slots.
     let interim = '';
-    let appended = false;
 
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+    for (let i = 0; i < event.results.length; i += 1) {
       const result = event.results[i];
-      const transcript = result[0]?.transcript ?? '';
-      if (!transcript) continue;
-      if (result.isFinal) {
-        this.buffer = `${this.buffer} ${transcript}`.trim();
-        appended = true;
-      } else {
-        interim += transcript;
-      }
+      const text = result[0]?.transcript ?? '';
+      if (!text) continue;
+      if (result.isFinal) this.finals.set(i, text);
+      else interim += text;
     }
 
-    this.handlers.onInterim(interim.trim());
+    this.handlers.onInterim(interim.replace(/\s+/g, ' ').trim());
 
-    if (!appended) return;
+    const pending = this.pendingText();
+    if (!pending) return;
 
-    const endsWithTerminator = /[.!?…]$/.test(this.buffer.trim());
-    if (endsWithTerminator) {
+    // Emit on the first finished sentence even if a fragment follows it, so the
+    // notebook keeps pace with the speaker.
+    if (/[.!?…]/.test(pending)) {
       this.clearTimer();
       this.flush('terminator');
       return;
     }
-    if (this.buffer.length >= MAX_BUFFER) {
+    if (pending.length >= MAX_BUFFER) {
       this.clearTimer();
       this.flush('max-length');
       return;
@@ -208,6 +280,28 @@ export class SpeechEngine {
     }
   }
 
+  /**
+   * The unwritten part of the transcript.
+   *
+   * For each index the browser is still allowed to revise, whatever was already
+   * written is removed from the front. So "Moi miten" after "Moi" yields "miten",
+   * and a rewrite that does not extend what was written yields nothing at all.
+   */
+  private pendingText(): string {
+    const chunks: string[] = [];
+    for (const [i, text] of [...this.finals.entries()].sort((a, b) => a[0] - b[0])) {
+      const already = this.written.get(i) ?? '';
+      if (!already) {
+        chunks.push(text);
+        continue;
+      }
+      if (!text.startsWith(already)) continue;
+      const rest = text.slice(already.length).trim();
+      if (rest) chunks.push(rest);
+    }
+    return chunks.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
   private emit(sentence: string): void {
     const key = speechDedupeKey(sentence);
     const now = Date.now();
@@ -219,23 +313,49 @@ export class SpeechEngine {
     }
   }
 
+  /**
+   * Writes out whatever part of the pending text is finished.
+   *
+   * A trailing fragment with no terminator is held back mid-sentence, so "Moi" →
+   * "Moi miten" → "Moi miten menee" arrives once, complete, instead of three
+   * times growing. Silence, stop and a locale switch write the fragment as-is,
+   * because then the speaker has clearly finished.
+   */
   private flush(reason: FlushReason): void {
-    const text = this.buffer.trim();
-    this.buffer = '';
-    if (!text) return;
+    const pending = this.pendingText();
+    if (!pending) return;
 
-    const sentences = splitSentences(text);
+    const sentences = splitSentences(pending);
     if (sentences.length === 0) return;
 
-    let emit = sentences;
-    if (reason === 'terminator' || reason === 'max-length') {
-      const last = sentences[sentences.length - 1];
-      if (!/[.!?…]$/.test(last)) {
-        emit = sentences.slice(0, -1);
-        this.buffer = last;
-      }
+    const last = sentences[sentences.length - 1];
+    const midSentence = reason === 'terminator' || reason === 'max-length';
+    const holdBack = midSentence && !/[.!?…]$/.test(last);
+    const toEmit = holdBack ? sentences.slice(0, -1) : sentences;
+
+    for (const sentence of toEmit) this.emit(sentence);
+
+    // Record what each index has now given us, so its next revision only offers
+    // the words that are actually new.
+    for (const [i, text] of this.finals) {
+      const already = this.written.get(i) ?? '';
+      if (text.startsWith(already)) this.written.set(i, text);
     }
-    for (const sentence of emit) this.emit(sentence);
+    if (holdBack) {
+      // The held fragment must be offered again by the next revision, so the
+      // highest index forgets it. Re-offering the whole index is harmless: the
+      // splitter drops anything already emitted.
+      const highest = Math.max(...this.finals.keys());
+      if (Number.isFinite(highest)) this.written.set(highest, '');
+      // Nothing else will arrive if the speaker has stopped, so give the fragment
+      // its own deadline instead of waiting for an event that never comes.
+      this.scheduleSilenceFlush();
+    }
+  }
+
+  /** True when finalised text is waiting to be written out. */
+  get hasPending(): boolean {
+    return this.pendingText().length > 0;
   }
 
   private scheduleRestart(): void {

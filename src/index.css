@@ -4,39 +4,69 @@
 
 @layer base {
   :root {
-    --ln-bg: #f8f7f6;
+    /* Light theme. Warm paper, not clinical white. */
+    --ln-bg: #f7f4ef;
     --ln-panel: #ffffff;
-    --ln-panel-2: #f3f0ee;
-    --ln-border: #e5e0dc;
-    --ln-text: #1b1512;
-    --ln-muted: #6f625d;
-    /* ChatterSnap brand: warm orange + deep plum. */
-    --ln-accent: #e8481f;
-    --ln-accent-soft: #fdece6;
+    --ln-panel-2: #f2eee7;
+    --ln-panel-3: #ffffff;
+    --ln-border: #e2dbd0;
+    --ln-border-soft: #ece6dc;
+    --ln-text: #1b1720;
+    --ln-muted: #6b6478;
+    --ln-dim: #8a8299;
+    --ln-faint: #a49cb0;
+
+    /* Brand: warm orange + deep plum. */
+    --ln-accent: #e2483d;
+    --ln-accent-soft: #fdeeec;
     --ln-accent-ink: #ffffff;
     --ln-brand-1: #f0512b;
-    --ln-brand-2: #4c1050;
+    --ln-brand-2: #4a2566;
+    --ln-plum: #4a2566;
+
+    /* Language identity — the same pairing in both themes. */
+    --ln-fi: #5a6fd8;
+    --ln-en: #e2703a;
+
     --ln-danger: #d92d20;
     --ln-warn: #b45309;
-    --ln-ok: #0f7b4f;
+    --ln-ok: #2f9e6a;
+    --ln-record: #e2483d;
+    --ln-record-idle: #4a2566;
+    /* The small ↳ that introduces a translation. */
+    --ln-arrow: #b3a89c;
     color-scheme: light;
   }
 
   .dark {
-    --ln-bg: #0d0a0b;
-    --ln-panel: #171214;
-    --ln-panel-2: #211a1d;
-    --ln-border: #322a2e;
-    --ln-text: #f4efef;
-    --ln-muted: #a2969a;
-    --ln-accent: #ff7a4d;
-    --ln-accent-soft: #2b1a17;
-    --ln-accent-ink: #1a0d09;
-    --ln-brand-1: #f0512b;
-    --ln-brand-2: #d9a8e0;
+    /* Dark theme — values taken from the design reference. */
+    --ln-bg: #17131d;
+    --ln-panel: #211c2b;
+    --ln-panel-2: #2a2433;
+    --ln-panel-3: #1c1824;
+    --ln-border: #332c3f;
+    --ln-border-soft: #2a2433;
+    --ln-text: #f2eee7;
+    --ln-muted: #b6aec4;
+    --ln-dim: #8a8299;
+    --ln-faint: #776e85;
+
+    --ln-accent: #ff8352;
+    --ln-accent-soft: #2c2032;
+    --ln-accent-ink: #ffffff;
+    --ln-brand-1: #ff8352;
+    --ln-brand-2: #b9a3e3;
+    --ln-plum: #4a2566;
+
+    --ln-fi: #8aa0f0;
+    --ln-en: #ff8352;
+
     --ln-danger: #ff6b5e;
     --ln-warn: #f0b429;
-    --ln-ok: #43d19a;
+    --ln-ok: #5fc489;
+    --ln-record: #e2483d;
+    --ln-record-idle: #4a2566;
+    --ln-arrow: #5a5566;
     color-scheme: dark;
   }
 
@@ -53,12 +83,20 @@
   body {
     background-color: var(--ln-bg);
     color: var(--ln-text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
+  h1,
+  h2,
+  h3,
+  .ln-display {
+    font-family: 'Space Grotesk', Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+
   ::selection {
-    background: var(--ln-accent-soft);
+    background: color-mix(in srgb, var(--ln-accent) 30%, transparent);
     color: var(--ln-text);
   }
 
@@ -69,29 +107,40 @@
   }
 
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: var(--ln-border);
-    border-radius: 999px;
-    border: 2px solid transparent;
-    background-clip: content-box;
+    background: color-mix(in srgb, var(--ln-border) 100%, transparent);
+    border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--ln-muted);
-    background-clip: content-box;
+    background: var(--ln-dim);
   }
 }
 
 @layer components {
+  /* A panel is the design's basic surface: card, feed, pill. */
   .ln-surface {
     background-color: var(--ln-panel);
     border: 1px solid var(--ln-border);
-    border-radius: 0.875rem;
+    border-radius: 10px;
+  }
+
+  /* The feed sits on a slightly deeper tone than the cards beside it. */
+  .ln-feed {
+    background-color: var(--ln-panel-3);
+    border: 1px solid var(--ln-border);
+    border-radius: 10px;
+  }
+
+  /* Uppercase micro-label used for every card heading. */
+  .ln-eyebrow {
+    @apply ln-display text-[0.75rem] font-semibold uppercase tracking-[0.04em];
+    color: var(--ln-dim);
   }
 
   .ln-btn {
@@ -124,10 +173,10 @@
     color: var(--ln-text);
   }
   .ln-btn-subtle:not(:disabled):hover {
-    filter: brightness(0.97);
+    filter: brightness(0.96);
   }
   .dark .ln-btn-subtle:not(:disabled):hover {
-    filter: brightness(1.15);
+    filter: brightness(1.16);
   }
 
   .ln-btn-danger {
@@ -145,22 +194,22 @@
 
   .ln-input {
     @apply w-full rounded-lg px-3 py-2 text-[0.8125rem] transition-colors;
-    background-color: var(--ln-panel-2);
+    background-color: var(--ln-panel-3);
     border: 1px solid var(--ln-border);
     color: var(--ln-text);
   }
   .ln-input::placeholder {
-    color: var(--ln-muted);
+    color: var(--ln-faint);
   }
   .ln-input:focus {
     outline: none;
     border-color: var(--ln-accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ln-accent) 18%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ln-accent) 20%, transparent);
   }
 
   .ln-label {
     @apply mb-1 block text-[0.6875rem] font-semibold uppercase tracking-[0.09em];
-    color: var(--ln-muted);
+    color: var(--ln-dim);
   }
 
   .ln-chip {
@@ -188,12 +237,71 @@
     background: linear-gradient(
       90deg,
       var(--ln-panel-2) 0%,
-      color-mix(in srgb, var(--ln-panel-2) 60%, var(--ln-border)) 50%,
+      color-mix(in srgb, var(--ln-panel-2) 55%, var(--ln-border)) 50%,
       var(--ln-panel-2) 100%
     );
     background-size: 200% 100%;
     animation: shimmer 1.4s linear infinite;
     border-radius: 6px;
+  }
+
+  /* Language badge — the small FI / EN tag above every line. */
+  .ln-langbadge {
+    @apply ln-display inline-flex items-center rounded text-[0.6875rem] font-semibold uppercase tracking-[0.04em];
+    padding: 2px 8px;
+    background-color: var(--ln-panel-2);
+  }
+
+  /* The pill that holds the direction and the record button. */
+  .ln-pillbar {
+    @apply inline-flex items-center gap-2 rounded-full;
+    padding: 6px;
+    background-color: var(--ln-panel);
+    border: 1px solid var(--ln-border);
+  }
+
+  .ln-record-btn {
+    @apply ln-display inline-flex select-none items-center gap-2 rounded-full text-[0.875rem] font-semibold;
+    padding: 11px 22px;
+    color: #fff;
+    background-color: var(--ln-record-idle);
+    transition: background-color 0.15s ease, transform 0.1s ease;
+  }
+  .ln-record-btn:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+  .ln-record-btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .ln-record-btn:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+  .ln-record-btn[data-recording='true'] {
+    background-color: var(--ln-record);
+  }
+  .ln-record-btn > .ln-record-mark {
+    @apply block shrink-0 rounded-[2px] bg-white;
+    width: 9px;
+    height: 9px;
+  }
+
+  /* Full-width action row inside the session/export cards. */
+  .ln-cardbtn {
+    @apply w-full rounded-md px-3 py-2.5 text-left text-[0.8125rem] font-medium transition-colors;
+    border: 1px solid var(--ln-border);
+    background-color: var(--ln-bg);
+    color: var(--ln-text);
+  }
+  .ln-cardbtn:not(:disabled):hover {
+    border-color: color-mix(in srgb, var(--ln-accent) 45%, var(--ln-border));
+    background-color: var(--ln-panel-2);
+  }
+
+  /* Small round pill used for status chips on tablet and mobile. */
+  .ln-stat {
+    @apply inline-flex items-center gap-1.5 rounded-full text-[0.8125rem];
+    padding: 8px 14px;
+    background-color: var(--ln-panel);
   }
 }
 
@@ -203,6 +311,58 @@
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+/* Live dot in the header: opacity pulse, exactly as the design specifies. */
+@keyframes csPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+.ln-dot-live {
+  animation: csPulse 1.4s ease-in-out infinite;
+}
+
+/* Blinking caret after "listening" in the live row. */
+@keyframes csBlink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+.ln-cursor {
+  animation: csBlink 1s step-end infinite;
+}
+
+@keyframes csEnter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ln-enter {
+  animation: csEnter 0.22s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ln-dot-live,
+  .ln-cursor,
+  .ln-enter,
+  .ln-skeleton {
+    animation: none;
   }
 }
 

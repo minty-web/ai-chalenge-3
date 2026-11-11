@@ -37,6 +37,11 @@ export function formatDateTime(ts: number): string {
   return `${formatDate(ts)} ${formatClock(ts)}`;
 }
 
+/** light → dark → system → light. Mirrors what the theme button says it does. */
+export function themeNext(theme: 'light' | 'dark' | 'system'): 'light' | 'dark' | 'system' {
+  return theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
+}
+
 /** `01:23` duration for the recording timer. */
 export function formatDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
